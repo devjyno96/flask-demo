@@ -11,31 +11,31 @@ app.secret_key = os.environ.get('SECRET_KEY', default=None)
 
 # Configure the REDIS_URL constant with the REDIS_URL environment variable.
 # REDIS_URL = os.environ.get('REDIS_URL')
-REDIS_URL = f'redis://localhost:6379'
+REDIS_URL = f'redis://{"redis"}:6379'
+redis = redis.Redis.from_url(REDIS_URL)
 
-
-class SessionStore:
-    """Store session data in Redis."""
-
-    def __init__(self, token, url='redis://localhost:6379', ttl=10):
-        self.token = token
-        self.redis = redis.Redis.from_url(url)
-        self.ttl = ttl
-
-    def set(self, key, value):
-        self.refresh()
-        return self.redis.hset(self.token, key, value)
-
-    def get(self, key, value):
-        self.refresh()
-        return self.redis.hget(self.token, key)
-
-    def incr(self, key):
-        self.refresh()
-        return self.redis.hincrby(self.token, key, 1)
-
-    def refresh(self):
-        self.redis.expire(self.token, self.ttl)
+# class SessionStore:
+#     """Store session data in Redis."""
+#
+#     def __init__(self, token, url='redis://localhost:6379', ttl=10):
+#         self.token = token
+#         self.redis = redis.Redis.from_url(url)
+#         self.ttl = ttl
+#
+#     def set(self, key, value):
+#         self.refresh()
+#         return self.redis.hset(self.token, key, value)
+#
+#     def get(self, key, value):
+#         self.refresh()
+#         return self.redis.hget(self.token, key)
+#
+#     def incr(self, key):
+#         self.refresh()
+#         return self.redis.hincrby(self.token, key, 1)
+#
+#     def refresh(self):
+#         self.redis.expire(self.token, self.ttl)
 
 
 @app.route('/')
@@ -43,9 +43,9 @@ def index():
     if 'username' in session:
         username = escape(session['username'])
 
-        store = SessionStore(username, REDIS_URL)
-
-        visits = store.incr('visits')
+        visits = redis.hincrby(username, 'visits', 1)
+        # BEGIN NEW CODE #
+        redis.expire(username, 10)
 
         return '''
             Logged in as {0}.<br>
