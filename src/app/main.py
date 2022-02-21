@@ -1,74 +1,49 @@
-import os
+from flask import Flask, session, url_for, redirect, request
 
-import redis
-from flask import Flask, session, redirect, escape, request
+# This is a session object. It is nothing more than a dict with some extra methods
+from src.app.redis.core import RedisSessionInterface
 
-# Configure the application name with the FLASK_APP environment variable.
 app = Flask(__name__)
-
-# Configure the secret_key with the SECRET_KEY environment variable.
-app.secret_key = os.environ.get('SECRET_KEY', default=None)
-
-# Configure the REDIS_URL constant with the REDIS_URL environment variable.
-# REDIS_URL = os.environ.get('REDIS_URL')
-REDIS_URL = f'redis://{"redis"}:6379'
-redis = redis.Redis.from_url(REDIS_URL)
-
-# class SessionStore:
-#     """Store session data in Redis."""
-#
-#     def __init__(self, token, url='redis://localhost:6379', ttl=10):
-#         self.token = token
-#         self.redis = redis.Redis.from_url(url)
-#         self.ttl = ttl
-#
-#     def set(self, key, value):
-#         self.refresh()
-#         return self.redis.hset(self.token, key, value)
-#
-#     def get(self, key, value):
-#         self.refresh()
-#         return self.redis.hget(self.token, key)
-#
-#     def incr(self, key):
-#         self.refresh()
-#         return self.redis.hincrby(self.token, key, 1)
-#
-#     def refresh(self):
-#         self.redis.expire(self.token, self.ttl)
+app.session_interface = RedisSessionInterface()
 
 
-@app.route('/')
+@app.route("/")
 def index():
-    if 'username' in session:
-        username = escape(session['username'])
+    session.permanent = False
+    if not 'refreshed' in session:
+        session['refreshed'] = 0
 
-        visits = redis.hincrby(username, 'visits', 1)
-        # BEGIN NEW CODE #
-        redis.expire(username, 10)
-
-        return '''
-            Logged in as {0}.<br>
-            Visits: {1}
-        '''.format(username, visits)
-
-    return 'You are not logged in'
+    text = "You refreshed the page %d times" % (session['refreshed'])
+    text += '<br/><a href="/kill">Reset</a>'
+    text += '<br/>username="%s"' % session.get('username', 'NULL')
+    session['refreshed'] = session['refreshed'] + 1
+    return text
 
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
+        test_u = request.form['username']
+        test_p = request.form['username']
         session['username'] = request.form['username']
-        return redirect('/')
+        return redirect(url_for('index'))
     return '''
         <form method="post">
-        <p><input type=text name=username>
-        <p><input type=submit value=Login>
+            <p><input type=text name=username>
+            <p><input type=password name=password>
+            <p><input type=submit value=Login>
         </form>
+
     '''
 
 
-@app.route('/logout')
+@app.route("/logout")
 def logout():
-    session.pop('username', None)
-    return redirect('/')
+    session.clear()
+    return redirect(url_for('index'))
+
+
+app.debug = True
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)
