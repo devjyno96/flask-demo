@@ -1,48 +1,78 @@
-import os
+from flask import Flask, session, url_for, redirect, request
+from uuid import uuid4
+from datetime import datetime, timedelta
+
+from flask.sessions import SessionInterface, SessionMixin
+from werkzeug.datastructures import CallbackDict
+
 import redis
-from flask import Flask, session, redirect, escape, request
-
-app = Flask(__name__)
-
-app.secret_key = os.environ.get('SECRET_KEY', default=None)
-
-# BEGIN NEW CODE - PART 1 #
-REDIS_URL = os.environ.get('REDIS_URL')
-store = redis.Redis.from_url(REDIS_URL)
+import pickle
 
 
-# END NEW CODE - PART 1 #
-
-@app.route('/')
-def index():
-    if 'username' in session:
-        # BEGIN NEW CODE - PART 2 #
-        username = escape(session['username'])
-        visits = store.hincrby(username, 'visits', 1)
-
-    return '''
-        Logged in as {0}.<br>
-        Visits: {1}
-        '''.format(username, visits)
-    # END NEW CODE - PART 2 #
-
-    return 'You are not logged in'
+# This is a session object. It is nothing more than a dict with some extra methods
+class RedisSession(CallbackDict, SessionMixin):
+    def __init__(self, initial=None, sid=None):
+        CallbackDict.__init__(self, initial)
+        self.sid = sid
+        self.modified = False
 
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        session['username'] = request.form['username']
-        return redirect('/')
+# Session interface is responsible for handling logic related to sessions
+# i.e. storing, saving, etc
+class RedisSessionInterface(SessionInterface):
+    # Init connection
+    def __init__(self, host='redis', port=6379, db=0, timeout=3600):
+        self.store = redis.StrictRedis(host=host, port=port, db=db)
+        self.timeout = timeout
 
-    return '''
-        <form method="post">
-        <p><input type=text name=username>
-        <p><input type=submit value=Login>
-        </form>'''
+    def open_session(self, app, request):
+        # Get session id from the cookie
+        sid = request.cookies.get(app.session_cookie_name)
 
+        # If id is given (session was created)
+        if sid:
+            # Try to load a session from Redisdb
+            stored_session = None
+            ssstr = self.store.get(sid)
+            if ssstr:
+                stored_session = pickle.loads(ssstr)
+            if stored_session:
+                # Check if the session isn't expired
+                if stored_session.get('expiration') > datetime.utcnow():
+                    return RedisSession(initial=stored_session['data'],
+                                        sid=stored_session['sid'])
 
-@app.route('/logout')
-def logout():
-    session.pop('username', None)
-    return redirect('/')
+        # If there was no session or it was expired...
+        # Generate a random id and create an empty session
+        sid = str(uuid4())
+        return RedisSession(sid=sid)
+
+    def save_session(self, app, session, response):
+        domain = self.get_cookie_domain(app)
+
+        # We're requested to delete the session
+        if not session:
+            response.delete_cookie(app.session_cookie_name, domain=domain)
+            return
+
+        # Refresh the session expiration time
+        # First, use get_expiration_time from SessionInterface
+        # If it fails, add 1 hour to current time
+        if self.get_expiration_time(app, session):
+            expiration = self.get_expiration_time(app, session)
+        else:
+            expiration = datetime.utcnow() + timedelta(hours=1)
+
+        # Update the Redis document, where sid equals to session.sid
+        ssd = {
+            'sid': session.sid,
+            'data': session,
+            'expiration': expiration
+        }
+        ssstr = pickle.dumps(ssd)
+        self.store.setex(session.sid, self.timeout, ssstr)
+
+        # Refresh the cookie
+        response.set_cookie(app.session_cookie_name, session.sid,
+                            expires=self.get_expiration_time(app, session),
+                            httponly=True, domain=domain)

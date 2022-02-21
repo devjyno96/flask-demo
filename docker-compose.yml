@@ -19,6 +19,8 @@ services:
     backend:
       build: .
       tty: true
+      environment:
+        - SECRET_KEY=FLASKSECRET
       volumes:
         - .:/app
       ports:
